@@ -14,7 +14,6 @@ import pytesseract
 from PIL import Image
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from openai import OpenAI
 from openpyxl import load_workbook
 
 APP_DIR = Path(__file__).resolve().parent
@@ -63,90 +62,88 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
         raise HTTPException(status_code=400, detail=f"PDF okunamadı: {exc}")
 
 
-SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "report_type": {"type": "string", "enum": ["mmo", "royal_cert", "other"]},
-        "building_name": {"type": "string"},
-        "raw_address": {"type": "string"},
-        "address": {"type": "string"},
-        "manager": {"type": "string"},
-        "phone": {"type": "string"},
-        "followup_date": {"type": "string"},
-        "requested_label": {"type": "string"},
-        "current_label": {"type": "string"},
-        "installation_year": {"type": "string"},
-        "floor_count": {"type": "string"},
-        "person_count": {"type": "string"},
-        "capacity_kg": {"type": "string"},
-        "standard": {"type": "string"},
-        "deficiencies": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "code": {"type": "string"},
-                    "section": {"type": "string", "enum": ["red", "yellow", "blue", "green", "unknown"]},
-                },
-                "required": ["code", "section"],
-            },
-        },
-    },
-    "required": [
-        "report_type", "building_name", "raw_address", "address", "manager", "phone",
-        "followup_date", "requested_label", "current_label", "installation_year",
-        "floor_count", "person_count", "capacity_kg", "standard", "deficiencies"
-    ],
-}
+def _first(patterns, text, flags=re.IGNORECASE | re.MULTILINE):
+    for pattern in patterns:
+        match = re.search(pattern, text, flags)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1)).strip(" :-\t\r\n")
+    return ""
 
 
-def analyse_with_ai(text: str, report_type_hint: str) -> dict:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(status_code=503, detail="Sunucuda OPENAI_API_KEY ayarı yapılmamış.")
-    client = OpenAI(api_key=api_key)
-    instructions = """
-Sen MMO veya Royal Cert asansör periyodik kontrol raporlarından veri çıkaran bir belge işleme motorusun.
-Yalnızca raporda açıkça bulunan bilgileri çıkar; tahmin etme. Bulunmayan metin alanlarını boş string yap.
-Uygunsuzluk kodlarını rapordaki gerçek uygunsuzluk listelerinden çıkar; açıklama içindeki standart maddelerini
-(ör. TS EN 81-73 madde 5.3.1) ayrı uygunsuzluk sanma. Her kodu raporda yazıldığı gibi koru; sonundaki -* veya -**
-işaretlerini silme. Aynı uygunsuzluğu iki kez ekleme.
-section alanı için her uygunsuzluğun ait olduğu bölümün renkli başlığına göre red/yellow/blue/green kullan. MMO raporlarında 1. kısım
-genellikle güvensiz/kırmızı, 2. kısım kusurlu/sarı, 3. kısım hafif kusurlu/mavi anlamına gelebilir; yalnızca
-raporun bölüm numaraları ve açıklamaları bunu destekliyorsa kullan, aksi halde unknown yap.
-building_name: raporda bina sorumlusu/adres alanında yer alan "Bina Adı - Adres" ifadesinin tireden ÖNCEKİ kısmı.
-raw_address: aynı alandaki ifadenin tamamını, tire dahil olduğu gibi çıkar.
-address: tireden sonraki adres kısmı. Eğer bölünemiyorsa raw_address ile aynı bırak.
-manager: bina sorumlusu/yönetici adı, yetkili servis personeli adı değil.
-followup_date: "Periyodik takip kontrol sonucu değerlendirilmesi" bölümünün sağ tarafındaki tarih veya raporda yazan bir sonraki periyodik/takip kontrol tarihi.
-requested_label: istenilen etiket; raporda açıkça bulunamazsa boş bırak, uygulama MAVİ kullanır.
-current_label: raporun mevcut sonuç/etiket seviyesi; yoksa boş bırak.
-floor_count: kat ve durak sayısı alanından DURAK sayısı; yalnız bir sayı açıkça durak olarak gösterilmişse onu yaz.
-person_count ve capacity_kg ayrı değerlerdir; yalnızca sayısal değeri çıkar (ör. person_count="4", capacity_kg="320"), "Kişi" veya "Kg" ekleme.
-standard: asansör standardını raporda yazıldığı şekilde çıkar.
-Rapor türü ipucu: """ + report_type_hint + """
-Çıktı istenen JSON şemasına tam uymalıdır.
-"""
-    clipped = text[:80000]
-    try:
-        response = client.responses.create(
-            model=MODEL,
-            input=[
-                {"role": "system", "content": [{"type": "input_text", "text": instructions}]},
-                {"role": "user", "content": [{"type": "input_text", "text": "RAPOR METNİ:\n" + clipped}]},
-            ],
-            text={"format": {"type": "json_schema", "name": "lift_inspection_report", "strict": True, "schema": SCHEMA}},
-            store=False,
-        )
-        import json
-        return json.loads(response.output_text)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Yapay zekâ raporu analiz edemedi: {exc}")
+def _section_for_line(line: str) -> str:
+    s = line.casefold()
+    if any(x in s for x in ("güvensiz", "guvensiz", "kırmızı", "kirmizi", "red")):
+        return "red"
+    if any(x in s for x in ("kusurlu", "sarı", "sari", "yellow")):
+        return "yellow"
+    if any(x in s for x in ("hafif kusurlu", "mavi", "blue")):
+        return "blue"
+    if any(x in s for x in ("uygun", "yeşil", "yesil", "green")):
+        return "green"
+    return "unknown"
 
+
+def analyse_without_ai(text: str, report_type_hint: str) -> dict:
+    """Deterministic parser for common MMO/Royal Cert text reports; no paid AI API."""
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
+    flat = "\n".join(lines)
+    building_raw = _first([
+        r"(?:Bina\s*(?:sorumlusu\s*)?olan\s*adres|Bina\s*Adı\s*/\s*Adres|Bina\s*Adı\s*[-:]?\s*Adres)\s*[:：]?\s*([^\n]+)",
+        r"(?:Bina\s*adı\s*ve\s*adres)\s*[:：]?\s*([^\n]+)",
+    ], flat)
+    manager = _first([r"Bina\s*sorumlusu\s*(?:Adı\s*soyadı|adı\s*soyadı|adı)\s*[:：]?\s*([^\n]+)", r"Yönetici\s*[:：]?\s*([^\n]+)"], flat)
+    phone = _first([r"Bina\s*sorumlusu\s*telefon(?:u)?\s*[:：]?\s*([+()\d\s-]{7,})", r"(?:Telefon|Cep telefonu)\s*[:：]?\s*([+()\d\s-]{7,})"], flat)
+    followup = _first([r"Periyodik\s*takip\s*kontrol\s*sonucu\s*değerlendirilmesi[^\n]{0,100}?([0-3]?\d[./-][01]?\d[./-](?:20)?\d{2})", r"(?:Bir\s*sonraki\s*)?(?:periyodik|takip)\s*kontrol\s*tarihi\s*[:：]?\s*([0-3]?\d[./-][01]?\d[./-](?:20)?\d{2})"], flat)
+    label = _first([r"İstenilen\s*etiket(?:i|i\s*rengi)?\s*[:：]?\s*([^\n]+)"], flat)
+    current_label = _first([r"(?:Kontrol\s*sonucu|Mevcut\s*etiket|Kontrol\s*etiketi)\s*[:：]?\s*([^\n]+)"], flat)
+    year = _first([r"(?:Montaj|Tesis|İmalat)\s*yılı\s*[:：]?\s*(\d{4})"], flat)
+    stops = _first([r"Durak\s*sayısı\s*[:：]?\s*(\d+)", r"Kat\s*ve\s*Durak\s*sayısı\s*[:：]?\s*[^\n]*?(\d+)\s*durak"], flat)
+    person = _first([r"Beyan\s*yükü\s*\(?(?:kg)?\)?\s*[:：]?\s*(\d+)\s*(?:kişi|kişilik)", r"(?:Kişi\s*sayısı|Kapasite)\s*[:：]?\s*(\d+)\s*(?:kişi)?"], flat)
+    capacity = _first([r"Beyan\s*yükü[^\n:]*[:：]?\s*(?:\d+\s*(?:kişi|kişilik)?\s*[/,-]?\s*)?(\d{2,5})\s*kg", r"Anma\s*yükü\s*[:：]?\s*(\d{2,5})\s*kg"], flat)
+    standard = _first([r"(TS\s*EN\s*81\s*[-.]\s*(?:1|20|80)(?:\s*\+\s*A3)?)"], flat)
+
+    # Infer report type only from visible terms.
+    low = flat.casefold()
+    report_type = "mmo" if "makina mühendisleri odası" in low or "mmo" in low else ("royal_cert" if "royal cert" in low or "royalcert" in low else "other")
+    deficiencies = []
+    seen = set()
+    section = "unknown"
+    for line in lines:
+        detected = _section_for_line(line)
+        if detected != "unknown":
+            section = detected
+        # Accept codes only on lines that look like a finding/defect row, avoiding standards references.
+        if re.search(r"TS\s*EN|madde\s+\d|standart", line, re.I):
+            continue
+        codes = re.findall(r"(?<!\d)(\d+(?:\.\d+)+(?:-\*{1,2})?)(?!\d)", line)
+        if not codes:
+            continue
+        looks_like_finding = bool(re.search(r"kusur|uygunsuz|eksik|güven|kabin|kapı|fren|durak|etiket|kontrol|madde|proforma|\b[123]\.\d", line, re.I))
+        if not looks_like_finding:
+            continue
+        for code in codes:
+            code = normalize_code(code)
+            if code not in seen:
+                seen.add(code)
+                deficiencies.append({"code": code, "section": section})
+
+    return {
+        "report_type": report_type,
+        "building_name": building_raw.split(" - ", 1)[0].strip() if " - " in building_raw else building_raw,
+        "raw_address": building_raw,
+        "address": building_raw.split(" - ", 1)[1].strip() if " - " in building_raw else "",
+        "manager": manager,
+        "phone": phone,
+        "followup_date": followup,
+        "requested_label": label,
+        "current_label": current_label,
+        "installation_year": year,
+        "floor_count": stops,
+        "person_count": person,
+        "capacity_kg": capacity,
+        "standard": standard,
+        "deficiencies": deficiencies,
+    }
 
 def normalize_code(code: str) -> str:
     return re.sub(r"\s+", "", str(code or "")).strip(".,;:()[]")
@@ -443,7 +440,7 @@ async def generate_excel(
     source_text = extract_pdf_text(pdf_bytes)
     if len(source_text.strip()) < 50:
         raise HTTPException(status_code=422, detail="PDF'den okunabilir metin çıkarılamadı. Daha net PDF deneyin.")
-    data = analyse_with_ai(source_text, reportType)
+    data = analyse_without_ai(source_text, reportType)
     excel_bytes = fill_workbook(data, source_text)
     base_name = Path(pdf.filename).stem
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base_name)[:70] or "rapor"
