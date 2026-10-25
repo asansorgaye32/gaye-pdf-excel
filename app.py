@@ -88,10 +88,11 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
     lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
     flat = "\n".join(lines)
     building_raw = _first([
-    r"ADRES\s*[:：]\s*([^\n]+)",
-    r"(?:Bina\s*(?:sorumlusu\s*)?olan\s*adres|Bina\s*Adı\s*/\s*Adres|Bina\s*Adı\s*[-:]?\s*Adres)\s*[:：]?\s*([^\n]+)",
-    r"(?:Bina\s*adı\s*ve\s*adres)\s*[:：]?\s*([^\n]+)",
-], flat)
+        r"BİNA SORUMLUSUNA İLİŞKİN BİLGİLER[\s\S]{0,500}?ADRES\s*[:：]\s*([^\n]+)",
+        r"ADRES\s*[:：]\s*([^\n]+)",
+        r"(?:Bina\s*(?:sorumlusu\s*)?olan\s*adres|Bina\s*Adı\s*/\s*Adres|Bina\s*Adı\s*[-:]?\s*Adres)\s*[:：]?\s*([^\n]+)",
+        r"(?:Bina\s*adı\s*ve\s*adres)\s*[:：]?\s*([^\n]+)",
+    ], flat)
     manager = _first([
     r"Bina\s*sorumlusuna\s*ilişkin\s*bilgiler[\s\S]{0,500}?ADI\s*VE\s*SOYADI\s*[:：]\s*([^\n]+)",
     r"Bina\s*sorumlusu\s*(?:Adı\s*soyadı|adı\s*soyadı|adı)\s*[:：]?\s*([^\n]+)",
@@ -137,9 +138,9 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
 
     return {
         "report_type": report_type,
-        "building_name": building_raw.split(" - ", 1)[0].strip() if " - " in building_raw else building_raw,
+        "building_name": building_raw.split("-", 1)[0].strip() if "-" in building_raw else building_raw,
         "raw_address": building_raw,
-        "address": building_raw.split(" - ", 1)[1].strip() if " - " in building_raw else "",
+        "address": building_raw.split("-", 1)[1].strip() if "-" in building_raw else "",
         "manager": manager,
         "phone": phone,
         "followup_date": followup,
