@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
 
 APP_DIR = Path(__file__).resolve().parent
-TEMPLATE_PATH = APP_DIR / "assets" / "2020 ÖRNEK PROFORMA HAZIRLAYANLI 4.08.2025(1).xlsm"
+TEMPLATE_PATH = APP_DIR / "assets" / "2020 ├ûRNEK PROFORMA HAZIRLAYANLI 4.08.2025(1).xlsm"
 LOOKUP_PATH = APP_DIR / "assets" / "2020_PROFORMA_OTOMATIK_KODLU.xlsm"
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 MAX_PDF_BYTES = 20 * 1024 * 1024
