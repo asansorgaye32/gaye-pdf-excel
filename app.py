@@ -305,7 +305,13 @@ def split_building_address(data: dict):
 
 def fill_workbook(data: dict, source_text: str) -> bytes:
     if not TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail="GAYE Asansör logolu Excel şablonu bulunamadı.")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Şablon bulunamadı. Aranan yol: {TEMPLATE_PATH} | "
+                f"assets klasörü mevcut: {(APP_DIR / 'assets').exists()}"
+            ),
+        )
     try:
         split_building_address(data)
         lookup = get_lookup()
