@@ -441,7 +441,9 @@ async def generate_excel(
     if len(source_text.strip()) < 50:
         raise HTTPException(status_code=422, detail="PDF'den okunabilir metin çıkarılamadı. Daha net PDF deneyin.")
     data = analyse_without_ai(source_text, reportType)
+    print("PDF ANALIZI TAMAMLANDI:", data, flush=True)
     excel_bytes = fill_workbook(data, source_text)
+    print("EXCEL OLUSTURULDU, BYTE SAYISI:", len(excel_bytes), flush=True)
     base_name = Path(pdf.filename).stem
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base_name)[:70] or "rapor"
     filename = f"{safe}_doldurulmus.xlsm"
