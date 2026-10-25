@@ -88,11 +88,19 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
     lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
     flat = "\n".join(lines)
     building_raw = _first([
-        r"(?:Bina\s*(?:sorumlusu\s*)?olan\s*adres|Bina\s*Adı\s*/\s*Adres|Bina\s*Adı\s*[-:]?\s*Adres)\s*[:：]?\s*([^\n]+)",
-        r"(?:Bina\s*adı\s*ve\s*adres)\s*[:：]?\s*([^\n]+)",
-    ], flat)
-    manager = _first([r"Bina\s*sorumlusu\s*(?:Adı\s*soyadı|adı\s*soyadı|adı)\s*[:：]?\s*([^\n]+)", r"Yönetici\s*[:：]?\s*([^\n]+)"], flat)
-    phone = _first([r"Bina\s*sorumlusu\s*telefon(?:u)?\s*[:：]?\s*([+()\d\s-]{7,})", r"(?:Telefon|Cep telefonu)\s*[:：]?\s*([+()\d\s-]{7,})"], flat)
+    r"ADRES\s*[:：]\s*([^\n]+)",
+    r"(?:Bina\s*(?:sorumlusu\s*)?olan\s*adres|Bina\s*Adı\s*/\s*Adres|Bina\s*Adı\s*[-:]?\s*Adres)\s*[:：]?\s*([^\n]+)",
+    r"(?:Bina\s*adı\s*ve\s*adres)\s*[:：]?\s*([^\n]+)",
+], flat)
+    manager = _first([
+    r"Bina\s*sorumlusuna\s*ilişkin\s*bilgiler[\s\S]{0,500}?ADI\s*VE\s*SOYADI\s*[:：]\s*([^\n]+)",
+    r"Bina\s*sorumlusu\s*(?:Adı\s*soyadı|adı\s*soyadı|adı)\s*[:：]?\s*([^\n]+)",
+], flat)
+    phone = _first([
+    r"BİNA SORUMLUSUNA İLİŞKİN BİLGİLER[\s\S]{0,800}?TELEFON NUMARASI\s*[:：]\s*([+()\d\s-]{7,})",
+    r"TELEFON\s*NUMARASI\s*[:：]\s*([+()\d\s-]{7,})",
+    r"Bina\s*sorumlusu\s*telefon(?:u)?\s*[:：]?\s*([+()\d\s-]{7,})",
+], flat)
     followup = _first([r"Periyodik\s*takip\s*kontrol\s*sonucu\s*değerlendirilmesi[^\n]{0,100}?([0-3]?\d[./-][01]?\d[./-](?:20)?\d{2})", r"(?:Bir\s*sonraki\s*)?(?:periyodik|takip)\s*kontrol\s*tarihi\s*[:：]?\s*([0-3]?\d[./-][01]?\d[./-](?:20)?\d{2})"], flat)
     label = _first([r"İstenilen\s*etiket(?:i|i\s*rengi)?\s*[:：]?\s*([^\n]+)"], flat)
     current_label = _first([r"(?:Kontrol\s*sonucu|Mevcut\s*etiket|Kontrol\s*etiketi)\s*[:：]?\s*([^\n]+)"], flat)
