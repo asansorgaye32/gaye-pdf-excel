@@ -415,6 +415,7 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
     except HTTPException:
         raise
     except Exception as exc:
+        print("EXCEL HATASI:", repr(exc), flush=True)
         raise HTTPException(status_code=500, detail=f"Excel oluşturulamadı: {exc}")
 
 
