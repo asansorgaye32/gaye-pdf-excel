@@ -128,27 +128,63 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
     # Infer report type only from visible terms.
     low = flat.casefold()
     report_type = "mmo" if "makina mühendisleri odası" in low or "mmo" in low else ("royal_cert" if "royal cert" in low or "royalcert" in low else "other")
-    deficiencies = []
+      deficiencies = []
     seen = set()
     section = "unknown"
+
     for line in lines:
-        detected = _section_for_line(line)
-        if detected != "unknown":
-            section = detected
-        # Accept codes only on lines that look like a finding/defect row, avoiding standards references.
+        s = line.casefold().strip()
+
+        # Bölüm başlıklarını belirle.
+        if any(x in s for x in ("kırmızı eksikler", "kirmizi eksikler", "red deficiencies")):
+            section = "red"
+            continue
+
+        if any(x in s for x in ("sarı eksikler", "sari eksikler", "yellow deficiencies")):
+            section = "yellow"
+            continue
+
+        if any(x in s for x in ("mavi eksikler", "mavi kusurlar", "blue deficiencies")):
+            section = "blue"
+            continue
+
+        if any(x in s for x in ("yeşil eksikler", "yesil eksikler", "green deficiencies")):
+            section = "green"
+            continue
+
+        # Yalnızca kırmızı ve sarı bölümlerini işle.
+        if section not in ("red", "yellow"):
+            continue
+
+        # Standart referanslarını kusur olarak alma.
         if re.search(r"TS\s*EN|madde\s+\d|standart", line, re.I):
             continue
-        codes = re.findall(r"(?<!\d)(\d+(?:\.\d+)+(?:-\*{1,2})?)(?!\d)", line)
+
+        codes = re.findall(
+            r"(?<!\d)(\d+(?:\.\d+)+(?:-\*{1,2})?)(?!\d)",
+            line
+        )
+
         if not codes:
             continue
-        looks_like_finding = bool(re.search(r"kusur|uygunsuz|eksik|güven|kabin|kapı|fren|durak|etiket|kontrol|madde|proforma|\b[123]\.\d", line, re.I))
+
+        looks_like_finding = bool(re.search(
+            r"kusur|uygunsuz|eksik|güven|kabin|kapı|fren|durak|etiket|kontrol|proforma|\b[123]\.\d",
+            line,
+            re.I
+        ))
+
         if not looks_like_finding:
             continue
+
         for code in codes:
             code = normalize_code(code)
-            if code not in seen:
+            if code and code not in seen:
                 seen.add(code)
-                deficiencies.append({"code": code, "section": section})
+                deficiencies.append({
+                    "code": code,
+                    "section": section
+                })
 
     return {
         "report_type": report_type,
