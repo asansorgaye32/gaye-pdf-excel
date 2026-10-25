@@ -102,7 +102,12 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
     r"TELEFON\s*NUMARASI\s*[:：]\s*([+()\d\s-]{7,})",
     r"Bina\s*sorumlusu\s*telefon(?:u)?\s*[:：]?\s*([+()\d\s-]{7,})",
 ], flat)
-    followup = _first([r"Periyodik\s*takip\s*kontrol\s*sonucu\s*değerlendirilmesi[^\n]{0,100}?([0-3]?\d[./-][01]?\d[./-](?:20)?\d{2})", r"(?:Bir\s*sonraki\s*)?(?:periyodik|takip)\s*kontrol\s*tarihi\s*[:：]?\s*([0-3]?\d[./-][01]?\d[./-](?:20)?\d{2})"], flat)
+    followup = _first([
+        r"BİR SONRAKİ\s+PERİYODİK\s*/?\s*TAKİP\s*KONTROL\s*TARİHİ[\s\S]{0,100}?(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
+        r"BİR SONRAKİ\s+PERİYODİK\s*/?\s*TAKİP\s*KONTROL\s*TARİHİ\s*[:：]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
+        r"(?:Bir\s*sonraki\s*)?(?:periyodik|takip)\s*kontrol\s*tarihi\s*[:：]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
+        r"Periyodik\s*takip\s*kontrol\s*sonucu\s*değerlendirilmesi[^\n]{0,100}?(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
+    ], flat)
     label = _first([r"İstenilen\s*etiket(?:i|i\s*rengi)?\s*[:：]?\s*([^\n]+)"], flat)
     current_label = _first([r"(?:Kontrol\s*sonucu|Mevcut\s*etiket|Kontrol\s*etiketi)\s*[:：]?\s*([^\n]+)"], flat)
     year = _first([r"(?:Montaj|Tesis|İmalat)\s*yılı\s*[:：]?\s*(\d{4})"], flat)
