@@ -127,36 +127,46 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
 
     # Infer report type only from visible terms.
     low = flat.casefold()
-    report_type = "mmo" if "makina mühendisleri odası" in low or "mmo" in low else ("royal_cert" if "royal cert" in low or "royalcert" in low else "other")
-      deficiencies = []
+    report_type = (
+        "mmo"
+        if "makina mühendisleri odası" in low or "mmo" in low
+        else "royal_cert"
+        if "royal cert" in low or "royalcert" in low
+        else "other"
+    )
+
+    deficiencies = []
     seen = set()
     section = "unknown"
 
     for line in lines:
         s = line.casefold().strip()
 
-        # Bölüm başlıklarını belirle.
-        if any(x in s for x in ("kırmızı eksikler", "kirmizi eksikler", "red deficiencies")):
+        # Başlıkların farklı yazılışlarını tanı.
+        compact = re.sub(r"\s+", " ", s)
+
+        # Yalnızca kırmızı ve sarı eksik başlıklarını kabul et.
+        if re.search(r"k[ıi]rm[ıi]z[ıi].*(eksik|kusur)", compact):
             section = "red"
             continue
 
-        if any(x in s for x in ("sarı eksikler", "sari eksikler", "yellow deficiencies")):
+        if re.search(r"sar[ıi].*(eksik|kusur)", compact):
             section = "yellow"
             continue
 
-        if any(x in s for x in ("mavi eksikler", "mavi kusurlar", "blue deficiencies")):
+        # Mavi ve yeşil bölümler tamamen yok sayılır.
+        if re.search(r"mav[ıi].*(eksik|kusur)|hafif kusurlu", compact):
             section = "blue"
             continue
 
-        if any(x in s for x in ("yeşil eksikler", "yesil eksikler", "green deficiencies")):
+        if re.search(r"ye[sş][ıi]l.*(eksik|kusur|uygun)|uygunluk", compact):
             section = "green"
             continue
 
-        # Yalnızca kırmızı ve sarı bölümlerini işle.
         if section not in ("red", "yellow"):
             continue
 
-        # Standart referanslarını kusur olarak alma.
+        # Standart referanslarını madde olarak alma.
         if re.search(r"TS\s*EN|madde\s+\d|standart", line, re.I):
             continue
 
@@ -168,17 +178,9 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
         if not codes:
             continue
 
-        looks_like_finding = bool(re.search(
-            r"kusur|uygunsuz|eksik|güven|kabin|kapı|fren|durak|etiket|kontrol|proforma|\b[123]\.\d",
-            line,
-            re.I
-        ))
-
-        if not looks_like_finding:
-            continue
-
         for code in codes:
             code = normalize_code(code)
+
             if code and code not in seen:
                 seen.add(code)
                 deficiencies.append({
