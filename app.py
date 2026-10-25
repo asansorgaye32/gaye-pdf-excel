@@ -403,12 +403,20 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
             cell.attrib.pop("t", None)
 
         first_row = 9
+
+        # Açıklama satırlarının kenarlık biçimlerini şablondan kopyala.
+        for row in range(first_row, first_row + len(deficiencies) + 1):
+            source_row = 9 if row == first_row else 10
+            for col in ("A", "B", "C", "D", "E", "G", "I"):
+                copy_cell_style(root, f"{col}{source_row}", f"{col}{row}")
+
         for idx, item in enumerate(deficiencies):
             row = first_row + idx
             set_inline(root, f"A{row}", "1")
             set_inline(root, f"C{row}", lookup.get(item["code"], "Proforma yok"))
             set_inline(root, f"G{row}", "0")
             set_formula(root, f"I{row}", f"A{row}*G{row}")
+
 
         labour_row = first_row + len(deficiencies)
         set_inline(root, f"A{labour_row}", "1")
