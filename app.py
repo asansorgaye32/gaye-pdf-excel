@@ -112,8 +112,17 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
     current_label = _first([r"(?:Kontrol\s*sonucu|Mevcut\s*etiket|Kontrol\s*etiketi)\s*[:：]?\s*([^\n]+)"], flat)
     year = _first([r"(?:Montaj|Tesis|İmalat)\s*yılı\s*[:：]?\s*(\d{4})"], flat)
     stops = _first([r"Durak\s*sayısı\s*[:：]?\s*(\d+)", r"Kat\s*ve\s*Durak\s*sayısı\s*[:：]?\s*[^\n]*?(\d+)\s*durak"], flat)
-    person = _first([r"Beyan\s*yükü\s*\(?(?:kg)?\)?\s*[:：]?\s*(\d+)\s*(?:kişi|kişilik)", r"(?:Kişi\s*sayısı|Kapasite)\s*[:：]?\s*(\d+)\s*(?:kişi)?"], flat)
-    capacity = _first([r"Beyan\s*yükü[^\n:]*[:：]?\s*(?:\d+\s*(?:kişi|kişilik)?\s*[/,-]?\s*)?(\d{2,5})\s*kg", r"Anma\s*yükü\s*[:：]?\s*(\d{2,5})\s*kg"], flat)
+    person = _first([
+        r"BEYAN\s*YÜKÜ\s*\(?(?:kg)?\)?\s*[:：]?\s*\d{2,5}\s*kg\s*/\s*(\d+)\s*kişi",
+        r"BEYAN\s*YÜKÜ[^\n:]*[:：]?\s*(\d+)\s*(?:kişi|kişilik)",
+        r"(?:Kişi\s*sayısı|Kapasite)\s*[:：]?\s*(\d+)\s*(?:kişi)?",
+    ], flat)
+
+    capacity = _first([
+        r"BEYAN\s*YÜKÜ\s*\(?(?:kg)?\)?\s*[:：]?\s*(\d{2,5})\s*kg\s*/\s*\d+\s*kişi",
+        r"BEYAN\s*YÜKÜ[^\n:]*[:：]?\s*(\d{2,5})\s*kg",
+        r"Anma\s*yükü\s*[:：]?\s*(\d{2,5})\s*kg",
+    ], flat)
     standard = _first([r"(TS\s*EN\s*81\s*[-.]\s*(?:1|20|80)(?:\s*\+\s*A3)?)"], flat)
 
     # Infer report type only from visible terms.
