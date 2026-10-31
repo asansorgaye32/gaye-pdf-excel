@@ -45,7 +45,6 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
             if len(re.sub(r"\s+", "", text)) >= 100:
                 return text
 
-            # OCR fallback for image-only or nearly empty PDFs.
             ocr_chunks = []
             for page in doc:
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
@@ -70,23 +69,149 @@ def _first(patterns, text, flags=re.IGNORECASE | re.MULTILINE):
     return ""
 
 
-def _section_for_line(line: str) -> str:
-    s = line.casefold()
-    if any(x in s for x in ("güvensiz", "guvensiz", "kırmızı", "kirmizi", "red")):
-        return "red"
-    if any(x in s for x in ("kusurlu", "sarı", "sari", "yellow")):
-        return "yellow"
-    if any(x in s for x in ("hafif kusurlu", "mavi", "blue")):
-        return "blue"
-    if any(x in s for x in ("uygun", "yeşil", "yesil", "green")):
-        return "green"
-    return "unknown"
+def normalise_label(value: str) -> str:
+    s = (value or "").strip().upper()
+    if "KIRMIZI" in s or "RED" in s or "GÜVENSİZ" in s or "GUVENSIZ" in s:
+        return "KIRMIZI"
+    if "MAVİ" in s or "MAVI" in s or "BLUE" in s or "HAFİF" in s or "HAFIF" in s:
+        return "MAVİ"
+    if "SARI" in s or "YELLOW" in s or "KUSURLU" in s:
+        return "SARI"
+    if "YEŞİL" in s or "YESIL" in s or "GREEN" in s or "UYGUN" in s:
+        return "YEŞİL"
+    return ""
+
+
+def normalize_standard(raw: str) -> str:
+    s = (raw or "").upper().replace("–", "-").replace(" ", "")
+    if "81-1+A3" in s or "81.1+A3" in s or "81.A3" in s or "81-A3" in s:
+        return "TS EN 81.a3"
+    if "81-20" in s or "81.20" in s:
+        return "TS EN 81.20"
+    if "81-80" in s or "81.80" in s or "81-1" in s or "81.1" in s:
+        return "TS EN 81.1"
+    return (raw or "").strip()
+
+
+def normalize_code(code: str) -> str:
+    return re.sub(r"\s+", "", str(code or "")).strip(".,;:()[]")
+
+
+# --- YENİ EKLENEN: MMO RAPORU ANALİZİ ---
+def analyse_mmo(text: str) -> dict:
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
+    flat = "\n".join(lines)
+    
+    # 1. Asansörün adı (Bina adı)
+    building_name_raw = _first([r"Asansörün\s+(.*?)\s+Bina ID"], flat)
+    if not building_name_raw:
+        building_name_raw = _first([r"Asansörün\s+(.*?)(?:\n|$)"], flat)
+    
+    # 2. Adres
+    address_raw = _first([r"ADRES\s+(.*?)(?=\n|TELEFON|E-POSTA|$)"], flat)
+    
+    # Bina adı ve adresi ayırma (Mahallesi, Caddesi, Sokak vb. kelimelere göre)
+    building_name = building_name_raw
+    address = address_raw
+    
+    if address_raw:
+        parts = re.split(r'(MAHALLESİ|MAH\.|CADDESİ|CAD\.|SOKAK|SOK\.|BULVARI|BUL\.|NO:)', address_raw, maxsplit=1)
+        if len(parts) > 1:
+            building_name = parts[0].strip()
+            address = " ".join(parts[1:]).strip()
+    
+    # 3. Yönetici ve Telefon
+    manager = _first([r"ADI VE SOYADI\s+(.*?)\s+ADRES"], flat)
+    if not manager:
+        manager = _first([r"ADI VE SOYADI\s+(.*?)(?=\n|TELEFON|$)"], flat)
+        
+    phone = _first([r"TELEFON NO\s*(\d+)"], flat)
+    
+    # 4. Takip Tarihi
+    followup_date = _first([r"Kontrol Tarihi\s*(\d{2}/\d{2}/\d{4})"], flat)
+    if not followup_date:
+        followup_date = _first([r"BİR SONRAKİ PERİYODİK/TAKİP KONTROL TARİHİ\s*[:：]?\s*(\d{2}/\d{2}/\d{4})"], flat)
+
+    # 5. Durak Sayısı
+    stops = _first([r"KAT VE DURAK SAYISI\s*(\d+)"], flat)
+    floor_count = f"{stops} Durak" if stops else ""
+    
+    # 6. Kişi Sayısı ve Kg
+    person_capacity = _first([r"BEYAN YÜKÜ \(KG/KİŞİ\)\s*(\d+)\s*(\d+)"], flat)
+    person_count = ""
+    capacity_kg = ""
+    if person_capacity:
+        # Regex'te (\d+) (\d+) yakaladık, genellikle ilki kg, ikincisi kişi sayısıdır
+        match = re.search(r"BEYAN YÜKÜ \(KG/KİŞİ\)\s*(\d+)\s*(\d+)", flat)
+        if match:
+            capacity_kg = match.group(1)
+            person_count = match.group(2)
+            
+    # 7. Montaj Yılı
+    year = _first([r"MONTAJ YILI\s*(\d{4})"], flat)
+    
+    # 8. Standart
+    standard = _first([r"STANDART/STANDARTLAR\s*(.*?)(?=\n|$)"], flat)
+    
+    # 9. Mevcut Etiket (Kırmızı / Sarı)
+    current_label = _first([r"PERİYODİK KONTROL SONUCUNUN TANIMI\s*(.*?)(?=\n|$)"], flat)
+    
+    # 10. Eksiklikler (* = Sarı, ** = Kırmızı)
+    deficiencies = []
+    seen = set()
+    
+    # Metin içinde 1.45.6-* veya 1.45.18-** gibi kalıpları ara
+    matches = re.findall(r"(\d+(?:\.\d+)+)-(\*{1,2})", flat)
+    for code, star in matches:
+        code = normalize_code(code)
+        if code in seen:
+            continue
+        seen.add(code)
+        
+        section = "red" if star == "**" else "yellow"
+        deficiencies.append({
+            "code": code,
+            "section": section
+        })
+        
+    # Eğer eksikliklerde kırmızı varsa mevcut etiket KIRMIZI, sadece sarı varsa SARI'dır.
+    if not current_label:
+        if any(d["section"] == "red" for d in deficiencies):
+            current_label = "KIRMIZI"
+        elif any(d["section"] == "yellow" for d in deficiencies):
+            current_label = "SARI"
+
+    return {
+        "report_type": "mmo",
+        "building_name": building_name,
+        "raw_address": address,
+        "address": address,
+        "manager": manager,
+        "phone": phone,
+        "followup_date": followup_date,
+        "requested_label": current_label,
+        "current_label": current_label,
+        "installation_year": year,
+        "floor_count": floor_count,
+        "person_count": person_count,
+        "capacity_kg": capacity_kg,
+        "standard": standard,
+        "deficiencies": deficiencies,
+    }
+# -----------------------------------------
 
 
 def analyse_without_ai(text: str, report_type_hint: str) -> dict:
     """Deterministic parser for common MMO/Royal Cert text reports; no paid AI API."""
     lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
     flat = "\n".join(lines)
+    low = flat.casefold()
+    
+    # 🔥 RAPOR TİPİNİ BURADA AYIRIYORUZ
+    if "makina mühendisleri odası" in low or "mmo" in low or "asansör kontrol merkezi" in low:
+        return analyse_mmo(text)
+    
+    # Aşağısı Royal Cert için aynen korundu
     building_raw = _first([
         r"BİNA SORUMLUSUNA İLİŞKİN BİLGİLER[\s\S]{0,500}?ADRES\s*[:：]\s*([^\n]+)",
         r"ADRES\s*[:：]\s*([^\n]+)",
@@ -94,14 +219,14 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
         r"(?:Bina\s*adı\s*ve\s*adres)\s*[:：]?\s*([^\n]+)",
     ], flat)
     manager = _first([
-    r"Bina\s*sorumlusuna\s*ilişkin\s*bilgiler[\s\S]{0,500}?ADI\s*VE\s*SOYADI\s*[:：]\s*([^\n]+)",
-    r"Bina\s*sorumlusu\s*(?:Adı\s*soyadı|adı\s*soyadı|adı)\s*[:：]?\s*([^\n]+)",
-], flat)
+        r"Bina\s*sorumlusuna\s*ilişkin\s*bilgiler[\s\S]{0,500}?ADI\s*VE\s*SOYADI\s*[:：]\s*([^\n]+)",
+        r"Bina\s*sorumlusu\s*(?:Adı\s*soyadı|adı\s*soyadı|adı)\s*[:：]?\s*([^\n]+)",
+    ], flat)
     phone = _first([
-    r"BİNA SORUMLUSUNA İLİŞKİN BİLGİLER[\s\S]{0,800}?TELEFON NUMARASI\s*[:：]\s*([+()\d\s-]{7,})",
-    r"TELEFON\s*NUMARASI\s*[:：]\s*([+()\d\s-]{7,})",
-    r"Bina\s*sorumlusu\s*telefon(?:u)?\s*[:：]?\s*([+()\d\s-]{7,})",
-], flat)
+        r"BİNA SORUMLUSUNA İLİŞKİN BİLGİLER[\s\S]{0,800}?TELEFON NUMARASI\s*[:：]\s*([+()\d\s-]{7,})",
+        r"TELEFON\s*NUMARASI\s*[:：]\s*([+()\d\s-]{7,})",
+        r"Bina\s*sorumlusu\s*telefon(?:u)?\s*[:：]?\s*([+()\d\s-]{7,})",
+    ], flat)
     followup = _first([
         r"BİR SONRAKİ\s+PERİYODİK\s*/?\s*TAKİP\s*KONTROL\s*TARİHİ[\s\S]{0,100}?(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
         r"BİR SONRAKİ\s+PERİYODİK\s*/?\s*TAKİP\s*KONTROL\s*TARİHİ\s*[:：]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
@@ -125,8 +250,6 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
     ], flat)
     standard = _first([r"(TS\s*EN\s*81\s*[-.]\s*(?:1|20|80)(?:\s*\+\s*A3)?)"], flat)
 
-    # Infer report type only from visible terms.
-    low = flat.casefold()
     report_type = (
         "mmo"
         if "makina mühendisleri odası" in low or "mmo" in low
@@ -141,11 +264,8 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
 
     for line in lines:
         s = line.casefold().strip()
-
-        # Başlıkların farklı yazılışlarını tanı.
         compact = re.sub(r"\s+", " ", s)
 
-        # Yalnızca kırmızı ve sarı eksik başlıklarını kabul et.
         if re.search(r"k[ıi]rm[ıi]z[ıi].*(eksik|kusur)", compact):
             section = "red"
             continue
@@ -154,7 +274,6 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
             section = "yellow"
             continue
 
-        # Mavi ve yeşil bölümler tamamen yok sayılır.
         if re.search(r"mav[ıi].*(eksik|kusur)|hafif kusurlu", compact):
             section = "blue"
             continue
@@ -166,21 +285,16 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
         if section not in ("red", "yellow"):
             continue
 
-        # Standart referanslarını madde olarak alma.
         if re.search(r"TS\s*EN|madde\s+\d|standart", line, re.I):
             continue
 
-        codes = re.findall(
-            r"(?<!\d)(\d+(?:\.\d+)+(?:-\*{1,2})?)(?!\d)",
-            line
-        )
+        codes = re.findall(r"(?<!\d)(\d+(?:\.\d+)+(?:-\*{1,2})?)(?!\d)", line)
 
         if not codes:
             continue
 
         for code in codes:
             code = normalize_code(code)
-
             if code and code not in seen:
                 seen.add(code)
                 deficiencies.append({
@@ -206,43 +320,11 @@ def analyse_without_ai(text: str, report_type_hint: str) -> dict:
         "deficiencies": deficiencies,
     }
 
-def normalize_code(code: str) -> str:
-    return re.sub(r"\s+", "", str(code or "")).strip(".,;:()[]")
-
-
-def normalize_standard(raw: str) -> str:
-    s = (raw or "").upper().replace("–", "-").replace(" ", "")
-    # User rule: 81.1 / 81.80 are represented as 81.1; then A3; then 81.20.
-    if "81-1+A3" in s or "81.1+A3" in s or "81.A3" in s or "81-A3" in s:
-        return "TS EN 81.a3"
-    if "81-20" in s or "81.20" in s:
-        return "TS EN 81.20"
-    if "81-80" in s or "81.80" in s or "81-1" in s or "81.1" in s:
-        return "TS EN 81.1"
-    return (raw or "").strip()
-
-def normalise_label(value: str) -> str:
-    s = (value or "").strip().upper()
-    if "KIRMIZI" in s or "RED" in s or "GÜVENSİZ" in s or "GUVENSIZ" in s:
-        return "KIRMIZI"
-    if "MAVİ" in s or "MAVI" in s or "BLUE" in s or "HAFİF" in s or "HAFIF" in s:
-        return "MAVİ"
-    if "SARI" in s or "YELLOW" in s or "KUSURLU" in s:
-        return "SARI"
-    if "YEŞİL" in s or "YESIL" in s or "GREEN" in s or "UYGUN" in s:
-        return "YEŞİL"
-    return ""
-
 
 def find_codes_in_source(text: str) -> set[str]:
-    # This is only a sanity check against AI-invented codes; AI decides which occurrences
-    # are actual deficiency list entries rather than references inside explanatory text.
     return {normalize_code(m.group(0)) for m in re.finditer(r"(?<!\d)\d+(?:\.\d+)+(?:-\*{1,2})?(?!\d)", text)}
 
 
-# The workbook is edited at the OOXML package level instead of being saved with
-# openpyxl. This leaves the original GAYE Asansör logo, VBA project, VML, drawings,
-# relationships, custom extensions and other Excel package parts untouched.
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
       "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
       "rel": "http://schemas.openxmlformats.org/package/2006/relationships"}
@@ -347,7 +429,6 @@ def copy_cell_style(root, source: str, target: str):
 
 def split_building_address(data: dict):
     raw = (data.get("raw_address") or data.get("building_name") or data.get("address") or "").strip()
-    # The expected format is e.g. "Özpetek A Blok - [address]".
     for sep in (" - ", " – ", " — "):
         if sep in raw:
             left, right = raw.split(sep, 1)
@@ -355,7 +436,6 @@ def split_building_address(data: dict):
                 data["building_name"] = left.strip()
                 data["address"] = right.strip()
                 return
-    # Also handle hyphen without surrounding spaces if it is clearly a separator.
     match = re.match(r"^(.+?)\s*-\s*(.+)$", raw)
     if match:
         data["building_name"], data["address"] = match.group(1).strip(), match.group(2).strip()
@@ -374,7 +454,11 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
             ),
         )
     try:
-        split_building_address(data)
+        # MMO raporlarında bina adı ve adres zaten ayrıldığı için split_building_address'e gerek yok,
+        # ama Royal Cert için çalışmaya devam etsin.
+        if data.get("report_type") != "mmo":
+            split_building_address(data)
+            
         lookup = get_lookup()
         source_codes = find_codes_in_source(source_text)
         deficiencies, seen = [], set()
@@ -388,7 +472,6 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
             seen.add(code)
             deficiencies.append({"code": code, "section": section})
 
-        # Current label is based on whichever red/yellow deficiency appears first.
         label = ""
         for item in deficiencies:
             if item["section"] == "red":
@@ -407,8 +490,6 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
         root = ET.fromstring(package[sheet_path])
         index_sheet(root)
 
-        # Header: only cell contents are changed; original styles and all other
-        # package parts (including logo image and VBA) remain byte-for-byte intact.
         headers = {
             "C2": data.get("building_name") or "",
             "C3": data.get("address") or "",
@@ -429,8 +510,6 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
         }
         for address, value in headers.items(): set_inline(root, address, value)
 
-        # Keep the template's preformatted rows. Clear only the item value cells.
-        # Never insert/delete rows, which is a common source of workbook repairs.
         for address, cell in list(_CELL_CACHE.items()):
             match = re.match(r"([A-Z]+)(\d+)$", address)
             if not match or not (9 <= int(match.group(2)) <= 3624) or match.group(1) not in ("A", "B", "C", "D", "E", "G", "I"):
@@ -442,7 +521,6 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
 
         first_row = 9
 
-        # Açıklama satırlarının kenarlık biçimlerini şablondan kopyala.
         for row in range(first_row, first_row + len(deficiencies) + 1):
             source_row = 9 if row == first_row else 10
             for col in ("A", "B", "C", "D", "E", "G", "I"):
@@ -455,7 +533,6 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
             set_inline(root, f"G{row}", "0")
             set_formula(root, f"I{row}", f"A{row}*G{row}")
 
-
         labour_row = first_row + len(deficiencies)
         set_inline(root, f"A{labour_row}", "1")
         set_inline(root, f"C{labour_row}", "İşçilik")
@@ -463,7 +540,6 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
         set_formula(root, f"I{labour_row}", f"A{labour_row}*G{labour_row}")
 
         total_row = labour_row + 1
-        # Reuse original total-row styles for the moving totals area.
         for offset, source_row in enumerate((12, 13, 14)):
             dest = total_row + offset
             for col in ("G", "I"):
@@ -476,7 +552,6 @@ def fill_workbook(data: dict, source_text: str) -> bytes:
         set_formula(root, f"I{total_row+2}", f"I{total_row}+I{total_row+1}")
 
         package[sheet_path] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-        # Request a full recalc on open, without changing any other workbook parts.
         wb_root = ET.fromstring(package["xl/workbook.xml"])
         calc = wb_root.find("m:calcPr", NS)
         if calc is None:
